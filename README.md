@@ -1,6 +1,6 @@
-# Foobar
+# really
 
-Foobar is a Python project for dealing with ...
+really is a Python project dedicated to a RL topic.
 
 ## Installation & Contributing
 
@@ -9,7 +9,7 @@ Use the [DEVELOPER.md](./DEVELOPER.md) guide to run or contribute to the project
 ## Usage
 
 ```python
-... Awaiting for your CLI here
+python -m gym.cart_pole
 ```
 
 ## License
