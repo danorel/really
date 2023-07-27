@@ -1,2 +1,7 @@
-def q_learning_table(states: list, actions: list):
-    pass
+class QLearningTable:
+    def __init__(self, states, actions):
+        print(states, actions)
+        pass
+
+    def update(self, state, action):
+        pass
