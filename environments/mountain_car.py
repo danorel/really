@@ -1,10 +1,23 @@
 import gym
 
-env = gym.make('MountainCar-v0', render_mode="human")
+from gym.utils.play import PlayPlot, play
 
-obs_space = env.observation_space
-action_space = env.action_space
+
+def callback(obs_t, obs_tp1, action, rew, terminated, truncated, info):
+    return [
+        rew,
+    ]
+
+
+plotter = PlayPlot(callback, 30 * 5, ["reward"])
+
+env = gym.make("MountainCar-v0", render_mode="human")
+
+keys_to_action = {("a"): 0, ("s"): 1, ("d"): 2}
 
 if __name__ == "__main__":
-    print("The observation space: {}".format(obs_space))
-    print("The action space: {}".format(action_space))
+    env.reset()
+    env.render()
+    print("The observation space: {}".format(env.observation_space))
+    print("The action space: {}".format(env.action_space))
+    play(env, callback=plotter.callback, keys_to_action=keys_to_action)
