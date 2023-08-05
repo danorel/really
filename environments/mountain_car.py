@@ -11,7 +11,7 @@ def callback(obs_t, obs_tp1, action, rew, terminated, truncated, info):
 
 plotter = PlayPlot(callback, 30 * 5, ["reward"])
 
-env = gym.make("MountainCar-v0", render_mode="human")
+env = gym.make("MountainCar-v0", render_mode="rgb_array")
 
 keys_to_action = {("a"): 0, ("s"): 1, ("d"): 2}
 

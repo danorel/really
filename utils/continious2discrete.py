@@ -1,7 +1,3 @@
-import numpy as np
-import numpy.typing as npt
-
-
 def continious2discrete(
     continious_from: float, continious_to: float, discrete_chunks: int
 ):
