@@ -1,3 +1,4 @@
+import argparse
 import copy
 import torch
 import pathlib
@@ -8,21 +9,11 @@ from random import random
 from environments.mountain_car import env
 
 
-EPISODES = 30
-STEPS = 1500
-
-C = 10
-
 EPS_MAX = 0.01
 EPS_MIN = 0.0
 
-ALPHA = 0.0001
-GAMMA = 0.99
-SPEED_REWARD_FACTOR = 300
-
 OBSERVATION_DIMENSIONS = 2
 ACTION_DIMENSIONS = 3
-HIDDEN_DIMENSIONS = 32
 
 DEVICE = torch.device("cpu")
 
@@ -34,12 +25,6 @@ pathlib.Path(MODEL_ASSET_DIR).mkdir(parents=True, exist_ok=True)
 
 IMAGE_FILENAME = 'mountain_car__deep_q_learning__loss-reward'
 MODEL_FILENAME = 'mountain_car__deep_q_learning'
-MODEL_VERSION = f"hidden={HIDDEN_DIMENSIONS}"
-
-IMAGE_PATH = pathlib.Path(IMAGE_ASSET_DIR + "/" +
-                          IMAGE_FILENAME + "__" + MODEL_VERSION + ".png")
-MODEL_PATH = pathlib.Path(MODEL_ASSET_DIR + "/" +
-                          MODEL_FILENAME + "__" + MODEL_VERSION)
 
 
 class DeepQModule(torch.nn.Module):
@@ -60,39 +45,29 @@ class ReplayMemory():
         pass
 
 
-def create_model():
-    model = DeepQModule(OBSERVATION_DIMENSIONS,
-                        ACTION_DIMENSIONS,
-                        HIDDEN_DIMENSIONS)
-
-    if MODEL_PATH.exists():
-        model.load_state_dict(torch.load(MODEL_PATH))
-
-    target_model = copy.deepcopy(model)
-
-    model.to(DEVICE)
-    target_model.to(DEVICE)
-
-    return model, target_model
-
-
-if __name__ == "__main__":
-    model, target_model = create_model()
-
-    loss_fn = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=ALPHA)
-
+def run(model,
+        target_model,
+        optimizer,
+        loss_fn,
+        episodes: int,
+        steps: int,
+        eps_max: float,
+        eps_min: float,
+        c: float,
+        gamma: float,
+        speed_reward_factor: float
+        ):
     reward_history = []
     loss_history = []
 
     successes = 0
 
     eps, eps_decay = (
-        EPS_MAX,
-        (EPS_MAX - EPS_MIN) / EPISODES
+        eps_max,
+        (eps_max - eps_min) / episodes
     )
 
-    for episode in range(EPISODES):
+    for episode in range(episodes + 1):
         print(f"Starting episode {episode}. Epsilon = {eps}")
 
         episode_reward = 0
@@ -100,7 +75,7 @@ if __name__ == "__main__":
 
         old_state, _ = env.reset()
 
-        for step in range(STEPS):
+        for step in range(steps):
             old_tensor = torch.tensor(old_state).to(DEVICE)
             old_q = model.forward(old_tensor)
 
@@ -110,13 +85,13 @@ if __name__ == "__main__":
             else:
                 action = env.action_space.sample()
 
-            new_state, reward, terminated, truncated, info = env.step(action)
+            new_state, reward, terminated, _, _ = env.step(action)
 
             _, new_speed = new_state
             _, old_speed = old_state
 
-            reward += SPEED_REWARD_FACTOR * \
-                (GAMMA * abs(new_speed) - abs(old_speed))
+            reward += speed_reward_factor * \
+                (gamma * abs(new_speed) - abs(old_speed))
 
             new_tensor = torch.tensor(new_state).to(DEVICE)
 
@@ -124,7 +99,7 @@ if __name__ == "__main__":
             new_max_q, _ = torch.max(new_q, -1)
 
             target_q = target_model.forward(new_tensor)
-            target_q[action] = reward + torch.mul(new_max_q.detach(), GAMMA)
+            target_q[action] = reward + torch.mul(new_max_q.detach(), gamma)
 
             loss = loss_fn(old_q, target_q)
 
@@ -144,7 +119,7 @@ if __name__ == "__main__":
             else:
                 old_state = new_state
 
-            if step % C == 0:
+            if step % c == 0:
                 target_model = copy.deepcopy(model)
 
         reward_history.append(episode_reward)
@@ -154,12 +129,81 @@ if __name__ == "__main__":
 
     env.close()
 
-    print(f"Success rate: {successes} out of {EPISODES}")
+    report = dict(reward_history=reward_history,
+                  loss_history=loss_history)
+
+    print(f"Success rate: {successes} out of {episodes}")
+
+    return successes, report
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description='Running Deep Q-Learning algorithm on MountainCar problem.')
+
+    parser.add_argument('--alpha', type=float, default=0.0001,
+                        help='learning rate (default: 0.0001)')
+    parser.add_argument('--c', type=int, default=10,
+                        help='amount of iterations after which target Q-Learning model clones original Q-Learning weights (default: 10)')
+    parser.add_argument('--gamma', type=float, default=0.99,
+                        help='discount rate (default: 0.99)')
+    parser.add_argument('--epsilon_min', type=float, default=0.01,
+                        help='lowest possible value of epsilon (epsilon-greedy strategy) (default: 0.01)')
+    parser.add_argument('--epsilon_max', type=float, default=0.3,
+                        help='highest possible value of epsilon (epsilon-greedy strategy) (default: 0.3)')
+
+    parser.add_argument('--episodes', type=int, default=100,
+                        help='training episodes (default: 100)')
+    parser.add_argument('--steps', type=int, default=1000,
+                        help='training steps per episode (default: 1000)')
+
+    parser.add_argument('--speed_reward_factor', type=float,
+                        default=300, help='reward trick (default: 300)')
+    parser.add_argument('--hidden_dimensions', type=int, default=32,
+                        help='number of nodes in hidden dimension layer (default: 32)')
+
+    args = parser.parse_args()
+
+    HIDDEN_DIMENSIONS = args.hidden_dimensions
+
+    MODEL_VERSION = f"hidden_dimensions={HIDDEN_DIMENSIONS}"
+
+    IMAGE_PATH = pathlib.Path(IMAGE_ASSET_DIR + "/" +
+                              IMAGE_FILENAME + "__" + MODEL_VERSION + ".png")
+    MODEL_PATH = pathlib.Path(MODEL_ASSET_DIR + "/" +
+                              MODEL_FILENAME + "__" + MODEL_VERSION)
+
+    model = DeepQModule(OBSERVATION_DIMENSIONS,
+                        ACTION_DIMENSIONS,
+                        HIDDEN_DIMENSIONS)
+
+    if MODEL_PATH.exists():
+        model.load_state_dict(torch.load(MODEL_PATH))
+
+    target_model = copy.deepcopy(model)
+
+    model.to(DEVICE)
+    target_model.to(DEVICE)
+
+    loss_fn = torch.nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.alpha)
+
+    successes, report = run(model,
+                            target_model,
+                            optimizer,
+                            loss_fn,
+                            episodes=args.episodes,
+                            steps=args.steps,
+                            eps_min=args.epsilon_min,
+                            eps_max=args.epsilon_max,
+                            c=args.c,
+                            gamma=args.gamma,
+                            speed_reward_factor=args.speed_reward_factor)
 
     torch.save(model.state_dict(), MODEL_PATH)
 
     plt.xlabel("Episode")
-    plt.plot(reward_history, label="Reward history")
-    plt.plot(loss_history, label="Loss history")
+    plt.plot(report.get('reward_history'), label="Reward history")
+    plt.plot(report.get('loss_history'), label="Loss history")
     plt.legend()
     plt.savefig(IMAGE_PATH)
