@@ -1,5 +1,4 @@
 import argparse
-import typing
 import pathlib
 import matplotlib.pyplot as plt
 

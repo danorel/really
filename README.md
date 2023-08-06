@@ -8,8 +8,16 @@ Use the [DEVELOPER.md](./DEVELOPER.md) guide to run or contribute to the project
 
 ## Usage
 
+1. Search hyperparameters for Deep Q-Learning algorithm:
+
 ```python
-python -m lib/q_learning.py
+python -m sandbox.mountain_car__deep_q_learning --search_hyperparams --strict
+```
+
+2. Run Deep Q-Learning algorithm:
+
+```python
+python -m sandbox.mountain_car__deep_q_learning --verbose
 ```
 
 ## License

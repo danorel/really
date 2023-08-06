@@ -5,6 +5,8 @@ import torch
 import pathlib
 import matplotlib.pyplot as plt
 
+from ray import tune
+
 from environments.mountain_car import env
 
 EPS_MAX = 0.01
@@ -219,6 +221,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        '--search_hyperparams',
+        type=bool,
+        default=False,
+        help="search optimal hyperparameters (default: False)",
+        action=argparse.BooleanOptionalAction
+    )
+
+    parser.add_argument(
         "--alpha", type=float, default=0.0001, help="learning rate (default: 0.0001)"
     )
     parser.add_argument(
@@ -281,32 +291,28 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     HIDDEN_DIMENSIONS = args.hidden_dimensions
-
     MODEL_VERSION = f"hidden_dimensions={HIDDEN_DIMENSIONS}"
-
-    IMAGE_PATH = pathlib.Path(
-        IMAGE_ASSET_DIR + "/" + IMAGE_FILENAME + "__" + MODEL_VERSION + ".png"
-    )
     MODEL_PATH = pathlib.Path(
-        MODEL_ASSET_DIR + "/" + MODEL_FILENAME + "__" + MODEL_VERSION
-    )
+        f"{MODEL_ASSET_DIR}/{MODEL_FILENAME}__{MODEL_VERSION}")
+    IMAGE_PATH = pathlib.Path(
+        f"{IMAGE_ASSET_DIR}/{IMAGE_FILENAME}__{MODEL_VERSION}.png")
 
     model = DeepQModule(OBSERVATION_DIMENSIONS,
                         ACTION_DIMENSIONS, HIDDEN_DIMENSIONS)
+    model.to(DEVICE)
 
     if MODEL_PATH.exists():
         model_state_dict = torch.load(MODEL_PATH)
         model.load_state_dict(model_state_dict)
 
     target_model = copy.deepcopy(model)
-
-    model.to(DEVICE)
     target_model.to(DEVICE)
 
     loss_fn = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.alpha)
 
     replay_memory = ReplayMemory(capacity=args.capacity)
+
     fit = make_fit(
         optimizer,
         loss_fn,
@@ -315,25 +321,44 @@ if __name__ == "__main__":
         ),
     )
 
-    successes, report = train(
-        model,
-        target_model,
-        replay_memory,
-        fit,
-        episodes=args.episodes,
-        steps=args.steps,
-        eps_min=args.epsilon_min,
-        eps_max=args.epsilon_max,
-        c=args.c,
-        batch_size=args.batch_size,
-        strict=args.strict,
-        verbose=args.verbose,
-    )
+    train_args = {
+        "model": model,
+        "target_model": target_model,
+        "replay_memory": replay_memory,
+        "fit": fit,
+        "episodes": args.episodes,
+        "steps": args.steps,
+        "eps_min": args.epsilon_min,
+        "eps_max": args.epsilon_max,
+        "c": args.c,
+        "batch_size": args.batch_size,
+        "strict": args.strict
+    }
 
-    torch.save(model.state_dict(), MODEL_PATH)
+    if args.search_hyperparams:
+        def objective(hyperparams_search_args):
+            args = {**train_args, **hyperparams_search_args}
+            successes, _ = train(**args)
+            return {"successes": successes}
 
-    plt.xlabel("Episode")
-    plt.plot(report.get("reward_history"), label="Reward history")
-    plt.plot(report.get("loss_history"), label="Loss history")
-    plt.legend()
-    plt.savefig(IMAGE_PATH)
+        search_space = {
+            "c": tune.grid_search([16, 32, 64]),
+            "eps_max": tune.grid_search([0.2, 0.3, 0.4]),
+            "batch_size": tune.grid_search([32, 64, 128, 256]),
+        }
+
+        tuner = tune.Tuner(objective, param_space=search_space)
+
+        results = tuner.fit()
+
+        print(results.get_best_result(metric="successes", mode="min").config)
+    else:
+        successes, report = train(**train_args, verbose=args.verbose)
+
+        torch.save(model.state_dict(), MODEL_PATH)
+
+        plt.xlabel("Episode")
+        plt.plot(report.get("reward_history"), label="Reward history")
+        plt.plot(report.get("loss_history"), label="Loss history")
+        plt.legend()
+        plt.savefig(IMAGE_PATH)
