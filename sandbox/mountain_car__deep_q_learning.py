@@ -211,7 +211,6 @@ if __name__ == "__main__":
         help="enable additional logging during training (default: False)",
         action=argparse.BooleanOptionalAction,
     )
-
     parser.add_argument(
         "--strict",
         type=bool,
@@ -219,7 +218,6 @@ if __name__ == "__main__":
         help="enable strict limitation for training agent, 200 steps to achieve the goal (default: False)",
         action=argparse.BooleanOptionalAction,
     )
-
     parser.add_argument(
         '--search_hyperparams',
         type=bool,
@@ -227,24 +225,23 @@ if __name__ == "__main__":
         help="search optimal hyperparameters (default: False)",
         action=argparse.BooleanOptionalAction
     )
-
     parser.add_argument(
-        "--alpha", type=float, default=0.0001, help="learning rate (default: 0.0001)"
+        "--alpha", type=float, default=0.001, help="learning rate (default: 0.001)"
     )
     parser.add_argument(
         "--c",
         type=int,
-        default=128,
-        help="amount of iterations after which target Q-Learning model clones original Q-Learning weights (default: 128)",
+        default=16,
+        help="amount of iterations after which target Q-Learning model clones original Q-Learning weights (default: 16)",
     )
     parser.add_argument(
         "--capacity",
         type=int,
-        default=64000,
-        help="capacity of experience memory (default: 64000)",
+        default=1000,
+        help="capacity of experience memory (default: 1000)",
     )
     parser.add_argument(
-        "--gamma", type=float, default=0.99, help="discount rate (default: 0.99)"
+        "--gamma", type=float, default=0.9, help="discount rate (default: 0.9)"
     )
     parser.add_argument(
         "--epsilon_min",
@@ -258,7 +255,6 @@ if __name__ == "__main__":
         default=0.3,
         help="highest possible value of epsilon (epsilon-greedy strategy) (default: 0.3)",
     )
-
     parser.add_argument(
         "--episodes", type=int, default=100, help="training episodes (default: 100)"
     )
@@ -271,15 +267,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=128,
-        help="training batch size for tuning (default: 128)",
+        default=32,
+        help="training batch size for tuning (default: 32)",
     )
-
     parser.add_argument(
         "--reward_speed_coefficient",
         type=float,
-        default=300,
-        help="reward trick (default: 300)",
+        default=100,
+        help="reward trick (default: 100)",
     )
     parser.add_argument(
         "--hidden_dimensions",
@@ -301,50 +296,56 @@ if __name__ == "__main__":
                         ACTION_DIMENSIONS, HIDDEN_DIMENSIONS)
     model.to(DEVICE)
 
-    if MODEL_PATH.exists():
-        model_state_dict = torch.load(MODEL_PATH)
-        model.load_state_dict(model_state_dict)
-
     target_model = copy.deepcopy(model)
     target_model.to(DEVICE)
 
     loss_fn = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.alpha)
-
-    replay_memory = ReplayMemory(capacity=args.capacity)
-
-    fit = make_fit(
-        optimizer,
-        loss_fn,
-        hyperparameters=dict(
-            gamma=args.gamma, reward_speed_coefficient=args.reward_speed_coefficient
-        ),
-    )
 
     train_args = {
         "model": model,
         "target_model": target_model,
-        "replay_memory": replay_memory,
-        "fit": fit,
         "episodes": args.episodes,
         "steps": args.steps,
         "eps_min": args.epsilon_min,
         "eps_max": args.epsilon_max,
-        "c": args.c,
-        "batch_size": args.batch_size,
         "strict": args.strict
     }
 
     if args.search_hyperparams:
-        def objective(hyperparams_search_args):
-            args = {**train_args, **hyperparams_search_args}
+        def objective(search_space):
+            optimizer = torch.optim.Adam(
+                model.parameters(), lr=search_space['alpha'])
+
+            fit = make_fit(
+                optimizer,
+                loss_fn,
+                hyperparameters=dict(
+                    gamma=search_space['gamma'],
+                    reward_speed_coefficient=search_space['reward_speed_coefficient']
+                ),
+            )
+
+            replay_memory = ReplayMemory(capacity=search_space['capacity'])
+
+            args = {
+                **train_args,
+                "c": search_space['c'],
+                "batch_size": search_space['batch_size'],
+                "fit": fit,
+                "replay_memory": replay_memory
+            }
+
             successes, _ = train(**args)
+
             return {"successes": successes}
 
         search_space = {
+            "alpha": tune.grid_search([0.01, 0.001, 0.0001]),
+            "gamma": tune.grid_search([0.9, 0.95, 0.99]),
             "c": tune.grid_search([16, 32, 64]),
-            "eps_max": tune.grid_search([0.2, 0.3, 0.4]),
+            "capacity": tune.grid_search([1000, 2500, 5000]),
             "batch_size": tune.grid_search([32, 64, 128, 256]),
+            "reward_speed_coefficient": tune.grid_search([100, 200, 300])
         }
 
         tuner = tune.Tuner(objective, param_space=search_space)
@@ -353,7 +354,29 @@ if __name__ == "__main__":
 
         print(results.get_best_result(metric="successes", mode="min").config)
     else:
-        successes, report = train(**train_args, verbose=args.verbose)
+        if MODEL_PATH.exists():
+            model_state_dict = torch.load(MODEL_PATH)
+            model.load_state_dict(model_state_dict)
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.alpha)
+
+        fit = make_fit(
+            optimizer,
+            loss_fn,
+            hyperparameters=dict(
+                gamma=args.gamma,
+                reward_speed_coefficient=args.reward_speed_coefficient
+            ),
+        )
+
+        replay_memory = ReplayMemory(capacity=args.capacity)
+
+        successes, report = train(**train_args,
+                                  replay_memory=replay_memory,
+                                  fit=fit,
+                                  c=args.c,
+                                  batch_size=args.batch_size,
+                                  verbose=args.verbose)
 
         torch.save(model.state_dict(), MODEL_PATH)
 

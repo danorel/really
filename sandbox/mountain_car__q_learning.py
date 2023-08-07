@@ -6,6 +6,7 @@ import numpy as np
 import numpy.typing as npt
 
 from random import random
+from ray import tune
 
 from environments.mountain_car import env
 from utils.continious2discrete import continious2discrete, search4discrete
@@ -176,6 +177,26 @@ def train(
     return successes, report
 
 
+def provide_continious2discreteobservation_converter(discrete_position_chunks: int, discrete_velocity_chunks: int):
+    discrete_position_space = continious2discrete(
+        continious_from=-1.2,
+        continious_to=0.6,
+        discrete_chunks=discrete_position_chunks,
+    )
+    discrete_velocity_space = continious2discrete(
+        continious_from=-0.03,
+        continious_to=0.03,
+        discrete_chunks=discrete_velocity_chunks,
+    )
+    continious2discreteobservation_converter = make_continious2discrete_converter(
+        discrete_spaces=[
+            discrete_position_space,
+            discrete_velocity_space,
+        ]
+    )
+    return continious2discreteobservation_converter
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Running Q-Learning algorithm on MountainCar problem."
@@ -188,7 +209,6 @@ if __name__ == "__main__":
         help="enable additional logging during training (default: False)",
         action=argparse.BooleanOptionalAction,
     )
-
     parser.add_argument(
         "--strict",
         type=bool,
@@ -196,7 +216,13 @@ if __name__ == "__main__":
         help="enable strict limitation for training agent, 200 steps to achieve the goal (default: False)",
         action=argparse.BooleanOptionalAction,
     )
-
+    parser.add_argument(
+        '--search_hyperparams',
+        type=bool,
+        default=False,
+        help="search optimal hyperparameters (default: False)",
+        action=argparse.BooleanOptionalAction
+    )
     parser.add_argument(
         "--alpha", type=float, default=0.1, help="learning rate (default: 0.1)"
     )
@@ -215,7 +241,6 @@ if __name__ == "__main__":
         default=0.3,
         help="highest possible value of epsilon (epsilon-greedy strategy) (default: 0.3)",
     )
-
     parser.add_argument(
         "--episodes", type=int, default=100, help="training episodes (default: 100)"
     )
@@ -225,7 +250,6 @@ if __name__ == "__main__":
         default=1000,
         help="training steps per episode (default: 1000)",
     )
-
     parser.add_argument(
         "--reward_speed_coefficient",
         type=float,
@@ -247,74 +271,110 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    DISCRETE_POSITION_CHUNKS = args.discrete_position_chunks
-    DISCRETE_VELOCITY_CHUNKS = args.discrete_velocity_chunks
+    train_args = {
+        "episodes": args.episodes,
+        "steps": args.steps,
+        "eps_min": args.epsilon_min,
+        "eps_max": args.epsilon_max,
+        "strict": args.strict,
+    }
 
-    DISCRETE_OBSERVATION_DIMENSIONS = (
-        DISCRETE_POSITION_CHUNKS * DISCRETE_VELOCITY_CHUNKS
-    )
+    if args.search_hyperparams:
+        def objective(search_space):
+            continious2discreteobservation_converter = provide_continious2discreteobservation_converter(search_space['discrete_position_chunks'],
+                                                                                                        search_space['discrete_velocity_chunks'])
 
-    MODEL_VERSION = (
-        f"position={DISCRETE_POSITION_CHUNKS}xvelocity={DISCRETE_VELOCITY_CHUNKS}"
-    )
+            discrete_observation_dimensions = (
+                search_space['discrete_position_chunks'] *
+                search_space['discrete_velocity_chunks']
+            )
 
-    IMAGE_PATH = pathlib.Path(
-        IMAGE_ASSET_DIR + "/" + IMAGE_FILENAME + "__" + MODEL_VERSION + ".png"
-    )
-    MODEL_PATH = pathlib.Path(
-        MODEL_ASSET_DIR + "/" + MODEL_FILENAME + "__" + MODEL_VERSION
-    )
+            q_table = np.zeros(
+                [discrete_observation_dimensions, DISCRETE_ACTION_DIMENSIONS])
 
-    discrete_position_space = continious2discrete(
-        continious_from=-1.2,
-        continious_to=0.6,
-        discrete_chunks=DISCRETE_POSITION_CHUNKS,
-    )
-    discrete_velocity_space = continious2discrete(
-        continious_from=-0.03,
-        continious_to=0.03,
-        discrete_chunks=DISCRETE_VELOCITY_CHUNKS,
-    )
+            fit = make_fit(
+                continious2discreteobservation_converter,
+                hyperparameters=dict(
+                    alpha=search_space['alpha'],
+                    gamma=search_space['gamma'],
+                    reward_speed_coefficient=search_space['reward_speed_coefficient'],
+                ),
+            )
 
-    continious2discreteobservation_converter = make_continious2discrete_converter(
-        discrete_spaces=[
-            discrete_position_space,
-            discrete_velocity_space,
-        ]
-    )
+            args = {
+                **train_args,
+                "q_table": q_table,
+                "continious2discreteobservation_converter": continious2discreteobservation_converter,
+                "fit": fit,
+            }
 
-    if MODEL_PATH.exists():
-        with MODEL_PATH.open(mode="rb") as f:
-            q_table = np.load(f)
+            successes, _ = train(**args)
+
+            return {"successes": successes}
+
+        search_space = {
+            "alpha": tune.grid_search([0.1, 0.01, 0.001]),
+            "discrete_position_chunks": tune.grid_search([10, 25, 50, 75]),
+            "discrete_velocity_chunks": tune.grid_search([15, 30, 45, 60]),
+            "gamma": tune.grid_search([0.9, 0.95, 0.99]),
+            "reward_speed_coefficient": tune.grid_search([100, 200, 300])
+        }
+
+        tuner = tune.Tuner(objective, param_space=search_space)
+
+        results = tuner.fit()
+
+        print(results.get_best_result(metric="successes", mode="min").config)
     else:
-        q_table = np.zeros(
-            [DISCRETE_OBSERVATION_DIMENSIONS, DISCRETE_ACTION_DIMENSIONS]
+        DISCRETE_POSITION_CHUNKS = args.discrete_position_chunks
+        DISCRETE_VELOCITY_CHUNKS = args.discrete_velocity_chunks
+
+        DISCRETE_OBSERVATION_DIMENSIONS = (
+            DISCRETE_POSITION_CHUNKS * DISCRETE_VELOCITY_CHUNKS
         )
 
-    fit = make_fit(
-        continious2discreteobservation_converter,
-        hyperparameters=dict(
-            alpha=args.alpha,
-            gamma=args.gamma,
-            reward_speed_coefficient=args.reward_speed_coefficient,
-        ),
-    )
+        MODEL_VERSION = (
+            f"position={DISCRETE_POSITION_CHUNKS}xvelocity={DISCRETE_VELOCITY_CHUNKS}"
+        )
+        IMAGE_PATH = pathlib.Path(
+            f"{IMAGE_ASSET_DIR}/{IMAGE_FILENAME}__{MODEL_VERSION}.png")
+        MODEL_PATH = pathlib.Path(
+            f"{MODEL_ASSET_DIR}/{MODEL_FILENAME}__{MODEL_VERSION}")
 
-    successes, report = train(
-        q_table,
-        continious2discreteobservation_converter,
-        fit,
-        episodes=args.episodes,
-        steps=args.steps,
-        eps_max=args.epsilon_max,
-        eps_min=args.epsilon_min,
-        strict=args.strict,
-        verbose=args.verbose,
-    )
+        discrete_observation_dimensions = (
+            args.discrete_position_chunks * args.discrete_velocity_chunks
+        )
 
-    with MODEL_PATH.open(mode="wb") as f:
-        np.save(f, q_table)
+        q_table = np.zeros(
+            [discrete_observation_dimensions, DISCRETE_ACTION_DIMENSIONS])
 
-    plt.plot(report.get("reward_history"), label="Reward history")
-    plt.legend()
-    plt.savefig(IMAGE_PATH)
+        if MODEL_PATH.exists():
+            with MODEL_PATH.open(mode="rb") as f:
+                q_table = np.load(f)
+
+        continious2discreteobservation_converter = provide_continious2discreteobservation_converter(args.discrete_position_chunks,
+                                                                                                    args.discrete_velocity_chunks)
+
+        fit = make_fit(
+            continious2discreteobservation_converter,
+            hyperparameters=dict(
+                alpha=args.alpha,
+                gamma=args.gamma,
+                reward_speed_coefficient=args.reward_speed_coefficient,
+            ),
+        )
+
+        successes, report = train(
+            q_table,
+            continious2discreteobservation_converter,
+            fit,
+            **train_args,
+            verbose=args.verbose,
+        )
+
+        with MODEL_PATH.open(mode="wb") as f:
+            np.save(f, q_table)
+
+        plt.plot(report.get("reward_history"), label="Reward history")
+        plt.legend()
+        plt.savefig(IMAGE_PATH)
