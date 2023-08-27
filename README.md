@@ -51,6 +51,24 @@ Found best configuration:
 python -m sandbox.mountain_car__deep_q_learning --verbose
 ```
 
+c. Policy Gradients algorithm
+
+1. Search hyperparameters for Policy Gradients algorithm:
+
+```python
+python -m sandbox.mountain_car__policy_gradients_learning --optimize --episodes 50
+```
+
+Found best configuration:
+
+```python
+{
+    'alpha': 0.001758007478624196, 
+    'gamma': 0.0021504344145734065, 
+    'hidden_size': 16
+}
+```
+
 ## License
 
 [MIT](./LICENSE)
