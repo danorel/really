@@ -2,6 +2,9 @@ import gym
 
 from gym.utils.play import PlayPlot, play
 
+OBSERVATION_DIMENSIONS = 2
+ACTION_DIMENSIONS = 3
+
 
 def callback(obs_t, obs_tp1, action, rew, terminated, truncated, info):
     return [

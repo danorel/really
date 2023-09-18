@@ -62,6 +62,7 @@ def reinforce(env: Env,
               verbose: bool = False,
               trial=None):
     is_optimization = trial is not None
+
     scores = []
 
     for episode in range(1, episodes + 1):
